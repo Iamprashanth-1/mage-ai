@@ -63,19 +63,19 @@ def publish_message(
 
 
 def run_pipeline(
-    pipeline: Pipeline,
+    pipeline_uuid: str,
     publish_message: Callable,
     publish_message_kwargs: Dict,
     config_copy_path: str,
 ) -> None:
     try:
-        global_vars = get_global_variables(pipeline.uuid)
-        pipeline.execute_sync(
+        global_vars = get_global_variables(pipeline_uuid)
+        Pipeline.get(pipeline_uuid).execute_sync(
             global_vars=global_vars,
             log_func=publish_message,
         )
         publish_message(
-            f'Pipeline {pipeline.uuid} execution complete.\n'
+            f'Pipeline {pipeline_uuid} execution complete.\n'
             'You can see the code block output in the corresponding code block.',
             execution_state='idle',
             **publish_message_kwargs,
@@ -83,7 +83,7 @@ def run_pipeline(
     except Exception:
         trace = traceback.format_exc().splitlines()
         publish_message(
-            f'Pipeline {pipeline.uuid} execution failed with error:',
+            f'Pipeline {pipeline_uuid} execution failed with error:',
             **publish_message_kwargs,
         )
         publish_message(
@@ -310,7 +310,7 @@ class WebSocketServer(tornado.websocket.WebSocketHandler):
             proc = multiprocessing.Process(
                 target=run_pipeline,
                 args=(
-                    pipeline,
+                    pipeline_uuid,
                     publish_message,
                     publish_message_kwargs,
                     config_copy_path,

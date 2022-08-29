@@ -38,6 +38,63 @@ import traceback
 import uuid
 
 
+def publish_message(
+    message: str,
+    execution_state: str = 'busy',
+    msg_type: str = 'stream_pipeline',
+    block_uuid: str = None,
+    value: Dict = dict(),
+    web_socket_server: 'WebSocketServer' = None,
+) -> None:
+    if web_socket_server is None:
+        return
+    msg_id = str(uuid.uuid4())
+    value['block_uuid'] = block_uuid
+    web_socket_server.running_executions_mapping[msg_id] = value
+    web_socket_server.send_message(
+        dict(
+            data=message,
+            execution_state=execution_state,
+            msg_id=msg_id,
+            msg_type=msg_type,
+            type=DataType.TEXT_PLAIN,
+        )
+    )
+
+
+def run_pipeline(
+    pipeline: Pipeline,
+    publish_message: Callable,
+    publish_message_kwargs: Dict,
+    config_copy_path: str,
+) -> None:
+    try:
+        global_vars = get_global_variables(pipeline.uuid)
+        pipeline.execute_sync(
+            global_vars=global_vars,
+            log_func=publish_message,
+        )
+        publish_message(
+            f'Pipeline {pipeline.uuid} execution complete.\n'
+            'You can see the code block output in the corresponding code block.',
+            execution_state='idle',
+            **publish_message_kwargs,
+        )
+    except Exception:
+        trace = traceback.format_exc().splitlines()
+        publish_message(
+            f'Pipeline {pipeline.uuid} execution failed with error:',
+            **publish_message_kwargs,
+        )
+        publish_message(
+            trace,
+            'idle',
+            **publish_message_kwargs,
+        )
+
+    delete_pipeline_copy_config(config_copy_path)
+
+
 class WebSocketServer(tornado.websocket.WebSocketHandler):
     """Simple WebSocket handler to serve clients."""
 
@@ -82,33 +139,19 @@ class WebSocketServer(tornado.websocket.WebSocketHandler):
             pipeline_uuid=pipeline_uuid,
         )
 
-        def publish_message(
-            message: str,
-            execution_state: str = 'busy',
-            msg_type: str = 'stream_pipeline',
-            block_uuid: str = None,
-        ) -> None:
-            msg_id = str(uuid.uuid4())
-            value['block_uuid'] = block_uuid
-            WebSocketServer.running_executions_mapping[msg_id] = value
-            self.send_message(
-                dict(
-                    data=message,
-                    execution_state=execution_state,
-                    msg_id=msg_id,
-                    msg_type=msg_type,
-                    type=DataType.TEXT_PLAIN,
-                )
-            )
-
         if cancel_pipeline:
-            cancel_pipeline_execution(pipeline, publish_message)
+            cancel_pipeline_execution(
+                pipeline,
+                publish_message,
+                dict(value=value, web_socket_server=self),
+            )
         elif execute_pipeline:
             self.__execute_pipeline(
                 pipeline,
                 kernel_name,
                 global_vars,
                 publish_message,
+                dict(value=value, web_socket_server=self),
             )
         else:
             self.__execute_block(
@@ -141,7 +184,6 @@ class WebSocketServer(tornado.websocket.WebSocketHandler):
 
         for client in self.clients:
             client.write_message(json.dumps(message_final))
-
 
     def __execute_block(
         self,
@@ -225,13 +267,13 @@ class WebSocketServer(tornado.websocket.WebSocketHandler):
                         uuid=block.uuid,
                     )))
 
-
     def __execute_pipeline(
         self,
         pipeline: Pipeline,
         kernel_name: str,
         global_vars: Dict[str, any],
         publish_message: Callable,
+        publish_message_kwargs: Dict,
     ) -> None:
         pipeline_uuid = pipeline.uuid
 
@@ -264,26 +306,15 @@ class WebSocketServer(tornado.websocket.WebSocketHandler):
             # The pipeline state can potentially break when the execution is cancelled,
             # so we save the pipeline config before execution if the user cancels the excecution.
             config_copy_path = save_pipeline_config()
-            
-            def run_pipeline() -> None:
-                try:
-                    global_vars = get_global_variables(pipeline_uuid)
-                    pipeline.execute_sync(
-                        global_vars=global_vars,
-                        log_func=publish_message,
-                    )
-                    publish_message(
-                        f'Pipeline {pipeline.uuid} execution complete.\n'
-                        'You can see the code block output in the corresponding code block.',
-                        execution_state = 'idle',
-                    )
-                except Exception:
-                    trace = traceback.format_exc().splitlines()
-                    publish_message(f'Pipeline {pipeline.uuid} execution failed with error:')
-                    publish_message(trace, 'idle')
 
-                delete_pipeline_copy_config(config_copy_path)
-
-            proc = multiprocessing.Process(target=run_pipeline)
+            proc = multiprocessing.Process(
+                target=run_pipeline,
+                args=(
+                    pipeline,
+                    publish_message,
+                    publish_message_kwargs,
+                    config_copy_path,
+                ),
+            )
             proc.start()
             set_current_pipeline_process(proc)

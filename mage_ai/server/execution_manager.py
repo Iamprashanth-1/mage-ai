@@ -1,6 +1,6 @@
 from distutils.dir_util import copy_tree
 from mage_ai.data_preparation.models.pipeline import Pipeline
-from typing import Callable
+from typing import Callable, Dict
 import multiprocessing
 import os
 import shutil
@@ -31,6 +31,7 @@ def set_current_pipeline_process(process: multiprocessing.Process) -> None:
 def cancel_pipeline_execution(
     pipeline: Pipeline,
     publish_message: Callable[..., None],
+    publish_message_kwargs: Dict = dict(),
 ) -> None:
     """
     Cancel the current pipeline execution running in the saved process
@@ -42,6 +43,7 @@ def cancel_pipeline_execution(
     publish_message(
         'Pipeline execution cancelled... reverting state to previous iteration',
         execution_state='idle',
+        **publish_message_kwargs,
     )
     config_path = pipeline_execution.previous_config_path
     if config_path is not None and os.path.isdir(config_path):
